@@ -1,7 +1,7 @@
 /*
 Plugin Name: FWK Content Manager - Import, De-duplicate & Bulk Update
 Description: Import content from API or XML, detect and remove duplicates, and perform bulk updates across any post type with venue/organizer handling
-Version: 4.0
+Version: 4.1
 */
 
 if (!defined('ABSPATH')) exit;
@@ -39,20 +39,18 @@ function fwk_content_manager_page() {
             <h2>Choose Import Source</h2>
             <table class="form-table">
                 <tr>
-                    <th><label for="import_post_type">Post Type</label></th>
+                    <th><label for="post_type">Post Type</label></th>
                     <td>
-                        <input type="text" id="import_post_type" class="regular-text" value="tribe_events" placeholder="tribe_events, post, page, etc.">
-                        <p class="description">Enter the post type to import (e.g., tribe_events, post, page, custom_post_type)</p>
-                    </td>
-                </tr>
-                <tr>
-                    <th>Post Type</th>
-                    <td>
-                        <select id="post_type" style="width: 300px;">
+                        <input type="text" id="post_type" class="regular-text" list="post_type_suggestions" value="tribe_events" placeholder="Select or enter custom post type">
+                        <datalist id="post_type_suggestions">
                             <option value="tribe_events">Events (tribe_events)</option>
+                            <option value="events">Events (events)</option>
                             <option value="post">Posts (post)</option>
-                        </select>
-                        <p class="description">Select the content type to import</p>
+                            <option value="page">Pages (page)</option>
+                            <option value="event-venue">Event Venue</option>
+                            <option value="event-organizer">Event Organizer</option>
+                        </datalist>
+                        <p class="description">Select a common post type or enter a custom one (e.g., tribe_events, post, page, custom_post_type)</p>
                     </td>
                 </tr>
                 <tr>
@@ -103,16 +101,8 @@ function fwk_content_manager_page() {
                 <tr>
                     <th><label for="limit">Import Limit</label></th>
                     <td>
-                        <select id="limit">
-                            <option value="0">All Events</option>
-                            <option value="10">10 Events</option>
-                            <option value="25">25 Events</option>
-                            <option value="50" selected>50 Events</option>
-                            <option value="100">100 Events</option>
-                            <option value="250">250 Events</option>
-                            <option value="500">500 Events</option>
-                            <option value="1000">1000 Events</option>
-                        </select>
+                        <input type="number" id="limit" value="50" min="0" style="width: 120px;">
+                        <p class="description">Number of events to import (0 = all events)</p>
                     </td>
                 </tr>
                 <tr>
@@ -127,6 +117,18 @@ function fwk_content_manager_page() {
                     <td>
                         <input type="number" id="start_page" value="1" min="1">
                         <p class="description">Resume import from a specific batch (useful after cancellation)</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th><label for="date_from">Published Date Filter</label></th>
+                    <td>
+                        <label style="display: inline-block; margin-right: 20px;">
+                            <strong>From:</strong> <input type="date" id="date_from" style="margin-left: 5px;">
+                        </label>
+                        <label style="display: inline-block;">
+                            <strong>To:</strong> <input type="date" id="date_to" style="margin-left: 5px;">
+                        </label>
+                        <p class="description">Filter by published date - leave blank for no date restriction. Use 'From' only to import from a date onwards, 'To' only for up to a date, or both for a date range.</p>
                     </td>
                 </tr>
                 <tr>
@@ -358,6 +360,8 @@ function fwk_content_manager_page() {
             const limit       = parseInt($('#limit').val());
             const perPage     = parseInt($('#per_page').val());
             const startPage   = parseInt($('#start_page').val()) || 1;
+            const dateFrom    = $('#date_from').val();
+            const dateTo      = $('#date_to').val();
             const onlyNew     = $('#only_new').is(':checked');
             const onlyExisting= $('#only_existing').is(':checked');
             const onlyImages  = $('#only_images').is(':checked');
@@ -429,7 +433,7 @@ function fwk_content_manager_page() {
                     addLog('Will process ' + totalToProcess + ' events starting from batch ' + startPage, '');
 
                     setTimeout(function(){
-                        importXmlBatch(xmlSessionId, startPage, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages);
+                        importXmlBatch(xmlSessionId, startPage, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo);
                     }, 200);
                 }).fail(function(xhr, status, error) {
                     addLog('Upload error: ' + (error || status), 'error');
@@ -469,13 +473,13 @@ function fwk_content_manager_page() {
                     addLog('Will process ' + totalToProcess + ' events starting from batch ' + startPage, '');
 
                     setTimeout(function(){
-                        importBatch(sourceUrl, startPage, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages);
+                        importBatch(sourceUrl, startPage, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo);
                     }, 200);
                 });
             }
         });
 
-        function importXmlBatch(sessionId, page, perPage, totalToProcess, forceImages, onlyNew, onlyExisting, onlyImages, debugMode, skipImages) {
+        function importXmlBatch(sessionId, page, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo) {
             if (importCancelled) {
                 finishImport(page, 'CANCELLED');
                 return;
@@ -501,11 +505,15 @@ function fwk_content_manager_page() {
                     session_id: sessionId,
                     page: page,
                     per_page: fetchCount,
+                    post_type: postType,
+                    date_from: dateFrom,
+                    date_to: dateTo,
                     force_images: forceImages ? 1 : 0,
                     skip_images: skipImages ? 1 : 0,
                     only_new: onlyNew ? 1 : 0,
                     only_existing: onlyExisting ? 1 : 0,
                     only_images: onlyImages ? 1 : 0,
+                    fuzzy_match: fuzzyMatch ? 1 : 0,
                     debug_mode: debugMode ? 1 : 0
                 }
             }).done(function(response) {
@@ -517,7 +525,7 @@ function fwk_content_manager_page() {
                     importStats.errors++;
                     updateStats(page, batchTime, null);
                     setTimeout(function(){
-                        importXmlBatch(sessionId, page + 1, perPage, totalToProcess, forceImages, onlyNew, onlyExisting, onlyImages, debugMode, skipImages);
+                        importXmlBatch(sessionId, page + 1, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo);
                     }, 1000);
                     return;
                 }
@@ -528,23 +536,23 @@ function fwk_content_manager_page() {
                     let delay = 500;
                     if (parseFloat(batchTime) > 30) delay = 2000;
                     else if (parseFloat(batchTime) > 15) delay = 1000;
-                    
+
                     setTimeout(function(){
-                        importXmlBatch(sessionId, page + 1, perPage, totalToProcess, forceImages, onlyNew, onlyExisting, onlyImages, debugMode, skipImages);
+                        importXmlBatch(sessionId, page + 1, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo);
                     }, delay);
                 } else {
                     finishImport(page, 'COMPLETE');
                 }
             }).fail(function(xhr, status, error) {
                 handleBatchError(xhr, status, error, page, function() {
-                    importXmlBatch(sessionId, page, perPage, totalToProcess, forceImages, onlyNew, onlyExisting, onlyImages, debugMode, skipImages);
+                    importXmlBatch(sessionId, page, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo);
                 }, function() {
-                    importXmlBatch(sessionId, page + 1, perPage, totalToProcess, forceImages, onlyNew, onlyExisting, onlyImages, debugMode, skipImages);
+                    importXmlBatch(sessionId, page + 1, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo);
                 });
             });
         }
 
-        function importBatch(sourceUrl, page, perPage, totalToProcess, forceImages, onlyNew, onlyExisting, onlyImages, debugMode, skipImages) {
+        function importBatch(sourceUrl, page, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo) {
             if (importCancelled) {
                 finishImport(page, 'CANCELLED');
                 return;
@@ -570,11 +578,15 @@ function fwk_content_manager_page() {
                     source_url: sourceUrl,
                     page: page,
                     per_page: fetchCount,
+                    post_type: postType,
+                    date_from: dateFrom,
+                    date_to: dateTo,
                     force_images: forceImages ? 1 : 0,
                     skip_images: skipImages ? 1 : 0,
                     only_new: onlyNew ? 1 : 0,
                     only_existing: onlyExisting ? 1 : 0,
                     only_images: onlyImages ? 1 : 0,
+                    fuzzy_match: fuzzyMatch ? 1 : 0,
                     debug_mode: debugMode ? 1 : 0
                 }
             }).done(function(response) {
@@ -586,7 +598,7 @@ function fwk_content_manager_page() {
                     importStats.errors++;
                     updateStats(page, batchTime, response.data ? response.data.memory_usage : null);
                     setTimeout(function(){
-                        importBatch(sourceUrl, page + 1, perPage, totalToProcess, forceImages, onlyNew, onlyExisting, onlyImages, debugMode, skipImages);
+                        importBatch(sourceUrl, page + 1, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo);
                     }, 2000);
                     return;
                 }
@@ -599,18 +611,18 @@ function fwk_content_manager_page() {
                     else if (parseFloat(batchTime) > 15) delay = 2000;
                     
                     addLog('Batch ' + page + ' completed in ' + batchTime + 's. Next batch in ' + (delay/1000) + 's...', 'debug');
-                    
+
                     setTimeout(function(){
-                        importBatch(sourceUrl, page + 1, perPage, totalToProcess, forceImages, onlyNew, onlyExisting, onlyImages, debugMode, skipImages);
+                        importBatch(sourceUrl, page + 1, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo);
                     }, delay);
                 } else {
                     finishImport(page, 'COMPLETE');
                 }
             }).fail(function(xhr, status, error) {
                 handleBatchError(xhr, status, error, page, function() {
-                    importBatch(sourceUrl, page, perPage, totalToProcess, forceImages, onlyNew, onlyExisting, onlyImages, debugMode, skipImages);
+                    importBatch(sourceUrl, page, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo);
                 }, function() {
-                    importBatch(sourceUrl, page + 1, perPage, totalToProcess, forceImages, onlyNew, onlyExisting, onlyImages, debugMode, skipImages);
+                    importBatch(sourceUrl, page + 1, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo);
                 });
             });
         }
@@ -1976,12 +1988,15 @@ function fwk_find_existing_event($source_id, $source_event, $post_type = 'events
 function fwk_ajax_acf_import_xml_batch() {
     @set_time_limit(120);
     @ini_set('memory_limit', '512M');
-    
+
     if (!current_user_can('manage_options')) wp_send_json_error('Unauthorized');
 
     $session_id    = sanitize_text_field($_POST['session_id']);
     $page          = max(1, intval($_POST['page']));
     $per_page      = max(1, min(50, intval($_POST['per_page'])));
+    $post_type     = sanitize_text_field($_POST['post_type'] ?? 'post');
+    $date_from     = sanitize_text_field($_POST['date_from'] ?? '');
+    $date_to       = sanitize_text_field($_POST['date_to'] ?? '');
     $force_images  = !empty($_POST['force_images']);
     $skip_images   = !empty($_POST['skip_images']);
     $only_new      = !empty($_POST['only_new']);
@@ -1993,6 +2008,30 @@ function fwk_ajax_acf_import_xml_batch() {
     $all_events = get_transient($session_id);
     if (!$all_events) {
         wp_send_json_error('Session expired - please re-upload XML');
+    }
+
+    // Apply date filtering if specified
+    if (!empty($date_from) || !empty($date_to)) {
+        $all_events = array_filter($all_events, function($event) use ($date_from, $date_to) {
+            $post_date = $event['post_date'] ?? '';
+            if (empty($post_date)) return true; // Include if no date
+
+            $event_timestamp = strtotime($post_date);
+            if ($event_timestamp === false) return true; // Include if invalid date
+
+            if (!empty($date_from)) {
+                $from_timestamp = strtotime($date_from);
+                if ($event_timestamp < $from_timestamp) return false;
+            }
+
+            if (!empty($date_to)) {
+                $to_timestamp = strtotime($date_to . ' 23:59:59');
+                if ($event_timestamp > $to_timestamp) return false;
+            }
+
+            return true;
+        });
+        $all_events = array_values($all_events); // Re-index array
     }
 
     $offset = ($page - 1) * $per_page;
@@ -2152,12 +2191,15 @@ function fwk_ajax_acf_get_total_count() {
 function fwk_ajax_acf_import_batch() {
     @set_time_limit(120);
     @ini_set('memory_limit', '512M');
-    
+
     if (!current_user_can('manage_options')) wp_send_json_error('Unauthorized');
 
     $source_url    = sanitize_text_field($_POST['source_url']);
     $page          = max(1, intval($_POST['page']));
     $per_page      = max(1, min(50, intval($_POST['per_page'])));
+    $post_type     = sanitize_text_field($_POST['post_type'] ?? 'post');
+    $date_from     = sanitize_text_field($_POST['date_from'] ?? '');
+    $date_to       = sanitize_text_field($_POST['date_to'] ?? '');
     $force_images  = !empty($_POST['force_images']);
     $skip_images   = !empty($_POST['skip_images']);
     $only_new      = !empty($_POST['only_new']);
@@ -2196,6 +2238,31 @@ function fwk_ajax_acf_import_batch() {
     }
 
     $events  = $data['posts'];
+
+    // Apply date filtering if specified
+    if (!empty($date_from) || !empty($date_to)) {
+        $events = array_filter($events, function($event) use ($date_from, $date_to) {
+            $post_date = $event['post_date'] ?? '';
+            if (empty($post_date)) return true; // Include if no date
+
+            $event_timestamp = strtotime($post_date);
+            if ($event_timestamp === false) return true; // Include if invalid date
+
+            if (!empty($date_from)) {
+                $from_timestamp = strtotime($date_from);
+                if ($event_timestamp < $from_timestamp) return false;
+            }
+
+            if (!empty($date_to)) {
+                $to_timestamp = strtotime($date_to . ' 23:59:59');
+                if ($event_timestamp > $to_timestamp) return false;
+            }
+
+            return true;
+        });
+        $events = array_values($events); // Re-index array
+    }
+
     $results = [
         'processed'         => 0,
         'created'           => 0,
