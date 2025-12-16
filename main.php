@@ -1,7 +1,7 @@
 /*
 Plugin Name: FWK Content Manager - Import, De-duplicate & Bulk Update
 Description: Import content from API or XML, detect and remove duplicates, and perform bulk updates across any post type with venue/organizer handling
-Version: 4.1
+Version: 4.3
 */
 
 if (!defined('ABSPATH')) exit;
@@ -39,7 +39,7 @@ function fwk_content_manager_page() {
             <h2>Choose Import Source</h2>
             <table class="form-table">
                 <tr>
-                    <th><label for="post_type">Post Type</label></th>
+                    <th><label for="post_type">Source Post Type</label></th>
                     <td>
                         <input type="text" id="post_type" class="regular-text" list="post_type_suggestions" value="tribe_events" placeholder="Select or enter custom post type">
                         <datalist id="post_type_suggestions">
@@ -50,7 +50,22 @@ function fwk_content_manager_page() {
                             <option value="event-venue">Event Venue</option>
                             <option value="event-organizer">Event Organizer</option>
                         </datalist>
-                        <p class="description">Select a common post type or enter a custom one (e.g., tribe_events, post, page, custom_post_type)</p>
+                        <p class="description">Post type to import FROM the source site</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th><label for="destination_post_type">Destination Post Type</label></th>
+                    <td>
+                        <select id="destination_post_type" style="width: 300px;">
+                            <?php
+                            $post_types = get_post_types(['public' => true], 'objects');
+                            foreach ($post_types as $post_type) {
+                                $selected = ($post_type->name === 'events') ? ' selected' : '';
+                                echo '<option value="' . esc_attr($post_type->name) . '"' . $selected . '>' . esc_html($post_type->labels->name . ' (' . $post_type->name . ')') . '</option>';
+                            }
+                            ?>
+                        </select>
+                        <p class="description">Post type to create/update IN this site</p>
                     </td>
                 </tr>
                 <tr>
@@ -90,7 +105,7 @@ function fwk_content_manager_page() {
                         <th><label for="xml_file">WordPress Export XML</label></th>
                         <td>
                             <input type="file" id="xml_file" accept=".xml" style="padding: 10px; border: 2px dashed #2271b1; background: #fff; width: 100%; max-width: 400px;">
-                            <p class="description">Upload a WordPress WXR export file containing tribe_events</p>
+                            <p class="description">Upload a WordPress WXR export file</p>
                         </td>
                     </tr>
                 </table>
@@ -102,11 +117,11 @@ function fwk_content_manager_page() {
                     <th><label for="limit">Import Limit</label></th>
                     <td>
                         <input type="number" id="limit" value="50" min="0" style="width: 120px;">
-                        <p class="description">Number of events to import (0 = all events)</p>
+                        <p class="description">Number of items to import (0 = all items)</p>
                     </td>
                 </tr>
                 <tr>
-                    <th><label for="per_page">Events Per Batch</label></th>
+                    <th><label for="per_page">Items Per Batch</label></th>
                     <td>
                         <input type="number" id="per_page" value="10" min="1" max="50">
                         <p class="description">Lower values (5-10) recommended to prevent timeouts</p>
@@ -131,12 +146,24 @@ function fwk_content_manager_page() {
                         <p class="description">Filter by published date - leave blank for no date restriction. Use 'From' only to import from a date onwards, 'To' only for up to a date, or both for a date range.</p>
                     </td>
                 </tr>
+                <tr id="event_start_date_row" style="display: none;">
+                    <th><label for="event_start_date_from">Event Start Date Filter</label></th>
+                    <td>
+                        <label style="display: inline-block; margin-right: 20px;">
+                            <strong>From:</strong> <input type="date" id="event_start_date_from" style="margin-left: 5px;">
+                        </label>
+                        <label style="display: inline-block;">
+                            <strong>To:</strong> <input type="date" id="event_start_date_to" style="margin-left: 5px;">
+                        </label>
+                        <p class="description"><strong>Event types only:</strong> Filter by event start date - leave blank for no restriction. Use 'From' only for events starting from a date onwards, 'To' only for events up to a date, or both for a date range.</p>
+                    </td>
+                </tr>
                 <tr>
                     <th>Import Options</th>
                     <td>
-                        <label><input type="checkbox" id="only_new" value="1"> Only import NEW events (skip existing)</label><br>
-                        <label><input type="checkbox" id="only_existing" value="1"> Only UPDATE existing events (skip new)</label><br>
-                        <label><input type="checkbox" id="only_images" value="1"> Only UPDATE images (skip event data)</label><br>
+                        <label><input type="checkbox" id="only_new" value="1"> Only import NEW items (skip existing)</label><br>
+                        <label><input type="checkbox" id="only_existing" value="1"> Only UPDATE existing items (skip new)</label><br>
+                        <label><input type="checkbox" id="only_images" value="1"> Only UPDATE images (skip content data)</label><br>
                         <label><input type="checkbox" id="force_images" value="1"> Re-download images even if they exist</label><br>
                         <label><input type="checkbox" id="skip_images" value="1" checked> Skip image downloads entirely (faster)</label><br>
                         <label><input type="checkbox" id="debug_mode" value="1"> Enable debug mode (verbose logging)</label>
@@ -147,11 +174,12 @@ function fwk_content_manager_page() {
         </div>
 
         <div id="fwk-import-progress" style="display:none;">
-            <h2>Importing Events...</h2>
+            <h2>Importing Content...</h2>
             <div class="fwk-stats">
                 <h3>Import Configuration</h3>
                 <ul>
                     <li><strong>Source:</strong> <span id="import-source">-</span></li>
+                    <li><strong>Destination Type:</strong> <span id="destination-type">-</span></li>
                     <li><strong>Total Available:</strong> <span id="total-available">Checking...</span></li>
                     <li><strong>Will Process:</strong> <span id="will-process">-</span></li>
                     <li><strong>Mode:</strong> <span id="import-mode">-</span></li>
@@ -190,20 +218,21 @@ function fwk_content_manager_page() {
 
         <h2>How This Works:</h2>
         <ul>
-            <li>Imports events or posts from API or WordPress XML export file</li>
+            <li>Imports content from API or WordPress XML export file</li>
+            <li>Choose source post type to import FROM and destination post type to import TO</li>
             <li>Matches content by source ID (migration_id), slug, or title+date+content to avoid duplicates</li>
             <li><strong>Duplicate Detection:</strong> Content is duplicate if Title + Date + Content match (99%); 100% if migration_id also matches</li>
-            <li><strong>Events only:</strong> Links venues and organizers using their migration_id</li>
+            <li><strong>Event post types:</strong> Links venues and organizers using their migration_id</li>
             <li>Only fills in MISSING data - preserves existing destination content</li>
             <li>Downloads featured images only if missing (unless "force" is checked)</li>
         </ul>
-        
+
         <h3>Troubleshooting:</h3>
         <ul>
-            <li>Reduce "Events Per Batch" to 5-10 if you get timeouts</li>
+            <li>Reduce "Items Per Batch" to 5-10 if you get timeouts</li>
             <li>Check "Skip image downloads" to test without images first</li>
             <li>Enable debug mode to see detailed processing info</li>
-            <li>For events: Make sure venues and organizers are imported first with their migration_id set</li>
+            <li>For event post types: Make sure venues and organizers are imported first with their migration_id set</li>
             <li><strong>NEW:</strong> Use the <strong>De-duplicate</strong> tab above to find and remove existing duplicates</li>
         </ul>
         </div>
@@ -306,13 +335,17 @@ function fwk_content_manager_page() {
     </div>
 
     <style>
+        /* Fix overlap issue with WordPress footer */
+        #wpfooter { position: relative !important; }
+        .wrap { margin-bottom: 50px; padding-bottom: 30px; }
+
         .fwk-progress-container { background: #f0f0f0; border: 1px solid #ccc; border-radius: 5px; height: 30px; margin: 20px 0; position: relative; overflow: hidden; }
         .fwk-progress-bar { background: linear-gradient(90deg, #2271b1 0%, #135e96 100%); height: 100%; transition: width 0.3s ease; }
         .fwk-progress-text { position: absolute; width: 100%; text-align: center; line-height: 30px; font-weight: bold; color: #333; z-index: 2; }
         .fwk-stats { background: #fff; border: 1px solid #ccc; padding: 15px; margin: 20px 0; border-radius: 5px; }
         .fwk-stats ul { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; list-style: none; padding: 0; }
         .fwk-stats li { background: #f9f9f9; padding: 10px; border-radius: 3px; }
-        .fwk-log { background: #fff; border: 1px solid #ccc; padding: 15px; max-height: 400px; overflow-y: auto; font-family: monospace; font-size: 12px; margin: 20px 0; }
+        .fwk-log { background: #fff; border: 1px solid #ccc; padding: 15px; max-height: 400px; overflow-y: auto; font-family: monospace; font-size: 12px; margin: 20px 0 50px 0; }
         .fwk-log-item { margin: 5px 0; padding: 5px; border-left: 3px solid #ccc; }
         .fwk-log-created { border-left-color: #46b450; }
         .fwk-log-updated { border-left-color: #00a0d2; }
@@ -341,6 +374,33 @@ function fwk_content_manager_page() {
         let batchStartTime = 0;
         let xmlSessionId = '';
 
+        // Function to check if post type is an event type
+        function isEventPostType(postType) {
+            const eventTypes = ['events', 'tribe_events', 'event-venue', 'event-organizer'];
+            return eventTypes.includes(postType);
+        }
+
+        // Show/hide event start date filter based on destination post type
+        function toggleEventStartDateFilter() {
+            const destinationPostType = $('#destination_post_type').val();
+            if (isEventPostType(destinationPostType)) {
+                $('#event_start_date_row').show();
+            } else {
+                $('#event_start_date_row').hide();
+                // Clear values when hiding
+                $('#event_start_date_from').val('');
+                $('#event_start_date_to').val('');
+            }
+        }
+
+        // Initialize on page load
+        toggleEventStartDateFilter();
+
+        // Update when destination post type changes
+        $('#destination_post_type').change(function() {
+            toggleEventStartDateFilter();
+        });
+
         $('input[name="import_method"]').change(function() {
             if ($(this).val() === 'api') {
                 $('#api-options').show();
@@ -355,20 +415,23 @@ function fwk_content_manager_page() {
             importCancelled = false;
             importStats = { processed: 0, created: 0, updated: 0, skipped: 0, images: 0, errors: 0, venues: 0, organizers: 0, duplicates: 0 };
 
-            const importMethod = $('input[name="import_method"]:checked').val();
-            const postType    = $('#post_type').val();
-            const limit       = parseInt($('#limit').val());
-            const perPage     = parseInt($('#per_page').val());
-            const startPage   = parseInt($('#start_page').val()) || 1;
-            const dateFrom    = $('#date_from').val();
-            const dateTo      = $('#date_to').val();
-            const onlyNew     = $('#only_new').is(':checked');
-            const onlyExisting= $('#only_existing').is(':checked');
-            const onlyImages  = $('#only_images').is(':checked');
-            const forceImages = $('#force_images').is(':checked');
-            const skipImages  = $('#skip_images').is(':checked');
-            const fuzzyMatch  = $('#fuzzy_match').is(':checked');
-            const debugMode   = $('#debug_mode').is(':checked');
+            const importMethod         = $('input[name="import_method"]:checked').val();
+            const postType             = $('#post_type').val();
+            const destinationPostType  = $('#destination_post_type').val();
+            const limit                = parseInt($('#limit').val());
+            const perPage              = parseInt($('#per_page').val());
+            const startPage            = parseInt($('#start_page').val()) || 1;
+            const dateFrom             = $('#date_from').val();
+            const dateTo               = $('#date_to').val();
+            const eventStartDateFrom   = $('#event_start_date_from').val();
+            const eventStartDateTo     = $('#event_start_date_to').val();
+            const onlyNew              = $('#only_new').is(':checked');
+            const onlyExisting         = $('#only_existing').is(':checked');
+            const onlyImages           = $('#only_images').is(':checked');
+            const forceImages          = $('#force_images').is(':checked');
+            const skipImages           = $('#skip_images').is(':checked');
+            const fuzzyMatch           = $('#fuzzy_match').is(':checked');
+            const debugMode            = $('#debug_mode').is(':checked');
 
             $('#fwk-import-form').hide();
             $('#fwk-import-progress').show();
@@ -377,7 +440,7 @@ function fwk_content_manager_page() {
             $('#back-to-form').hide();
 
             let mode = 'Create & Update';
-            if (onlyNew) mode = 'New events only';
+            if (onlyNew) mode = 'New items only';
             if (onlyExisting) mode = 'Update existing only';
             if (onlyImages) mode = 'Images only';
 
@@ -387,6 +450,7 @@ function fwk_content_manager_page() {
 
             $('#import-mode').text(mode);
             $('#image-mode').text(imageMode);
+            $('#destination-type').text(destinationPostType);
             $('#debug-status').text(debugMode ? 'Enabled' : 'Disabled');
 
             if (importMethod === 'xml') {
@@ -423,17 +487,17 @@ function fwk_content_manager_page() {
 
                     xmlSessionId = response.data.session_id;
                     const totalAvailable = response.data.total;
-                    const skippedEvents = (startPage - 1) * perPage;
-                    const remainingEvents = Math.max(0, totalAvailable - skippedEvents);
-                    const totalToProcess = (limit > 0) ? Math.min(limit, remainingEvents) : remainingEvents;
+                    const skippedItems = (startPage - 1) * perPage;
+                    const remainingItems = Math.max(0, totalAvailable - skippedItems);
+                    const totalToProcess = (limit > 0) ? Math.min(limit, remainingItems) : remainingItems;
 
-                    $('#total-available').text(totalAvailable + ' events');
-                    $('#will-process').text((limit > 0 ? totalToProcess + ' events' : 'All remaining events') + (startPage > 1 ? ' (from batch ' + startPage + ')' : ''));
-                    addLog('Parsed ' + totalAvailable + ' events from XML', 'created');
-                    addLog('Will process ' + totalToProcess + ' events starting from batch ' + startPage, '');
+                    $('#total-available').text(totalAvailable + ' items');
+                    $('#will-process').text((limit > 0 ? totalToProcess + ' items' : 'All remaining items') + (startPage > 1 ? ' (from batch ' + startPage + ')' : ''));
+                    addLog('Parsed ' + totalAvailable + ' items from XML', 'created');
+                    addLog('Will process ' + totalToProcess + ' items starting from batch ' + startPage, '');
 
                     setTimeout(function(){
-                        importXmlBatch(xmlSessionId, startPage, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo);
+                        importXmlBatch(xmlSessionId, startPage, perPage, totalToProcess, postType, destinationPostType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo, eventStartDateFrom, eventStartDateTo);
                     }, 200);
                 }).fail(function(xhr, status, error) {
                     addLog('Upload error: ' + (error || status), 'error');
@@ -445,7 +509,7 @@ function fwk_content_manager_page() {
                 const sourceUrl = $('#source_url').val();
                 $('#import-source').text('API: ' + sourceUrl.substring(0, 50) + '...');
 
-                addLog('Fetching total event count...', '');
+                addLog('Fetching total item count...', '');
                 if (startPage > 1) {
                     addLog('Starting from batch ' + startPage, '');
                 }
@@ -463,23 +527,23 @@ function fwk_content_manager_page() {
                     }
 
                     const totalAvailable = response.data.total;
-                    const skippedEvents = (startPage - 1) * perPage;
-                    const remainingEvents = Math.max(0, totalAvailable - skippedEvents);
-                    const totalToProcess = (limit > 0) ? Math.min(limit, remainingEvents) : remainingEvents;
+                    const skippedItems = (startPage - 1) * perPage;
+                    const remainingItems = Math.max(0, totalAvailable - skippedItems);
+                    const totalToProcess = (limit > 0) ? Math.min(limit, remainingItems) : remainingItems;
 
-                    $('#total-available').text(totalAvailable + ' events');
-                    $('#will-process').text((limit > 0 ? totalToProcess + ' events' : 'All remaining events') + (startPage > 1 ? ' (from batch ' + startPage + ')' : ''));
-                    addLog('Found ' + totalAvailable + ' total events', '');
-                    addLog('Will process ' + totalToProcess + ' events starting from batch ' + startPage, '');
+                    $('#total-available').text(totalAvailable + ' items');
+                    $('#will-process').text((limit > 0 ? totalToProcess + ' items' : 'All remaining items') + (startPage > 1 ? ' (from batch ' + startPage + ')' : ''));
+                    addLog('Found ' + totalAvailable + ' total items', '');
+                    addLog('Will process ' + totalToProcess + ' items starting from batch ' + startPage, '');
 
                     setTimeout(function(){
-                        importBatch(sourceUrl, startPage, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo);
+                        importBatch(sourceUrl, startPage, perPage, totalToProcess, postType, destinationPostType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo, eventStartDateFrom, eventStartDateTo);
                     }, 200);
                 });
             }
         });
 
-        function importXmlBatch(sessionId, page, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo) {
+        function importXmlBatch(sessionId, page, perPage, totalToProcess, postType, destinationPostType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo, eventStartDateFrom, eventStartDateTo) {
             if (importCancelled) {
                 finishImport(page, 'CANCELLED');
                 return;
@@ -506,8 +570,11 @@ function fwk_content_manager_page() {
                     page: page,
                     per_page: fetchCount,
                     post_type: postType,
+                    destination_post_type: destinationPostType,
                     date_from: dateFrom,
                     date_to: dateTo,
+                    event_start_date_from: eventStartDateFrom,
+                    event_start_date_to: eventStartDateTo,
                     force_images: forceImages ? 1 : 0,
                     skip_images: skipImages ? 1 : 0,
                     only_new: onlyNew ? 1 : 0,
@@ -525,7 +592,7 @@ function fwk_content_manager_page() {
                     importStats.errors++;
                     updateStats(page, batchTime, null);
                     setTimeout(function(){
-                        importXmlBatch(sessionId, page + 1, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo);
+                        importXmlBatch(sessionId, page + 1, perPage, totalToProcess, postType, destinationPostType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo, eventStartDateFrom, eventStartDateTo);
                     }, 1000);
                     return;
                 }
@@ -538,21 +605,21 @@ function fwk_content_manager_page() {
                     else if (parseFloat(batchTime) > 15) delay = 1000;
 
                     setTimeout(function(){
-                        importXmlBatch(sessionId, page + 1, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo);
+                        importXmlBatch(sessionId, page + 1, perPage, totalToProcess, postType, destinationPostType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo, eventStartDateFrom, eventStartDateTo);
                     }, delay);
                 } else {
                     finishImport(page, 'COMPLETE');
                 }
             }).fail(function(xhr, status, error) {
                 handleBatchError(xhr, status, error, page, function() {
-                    importXmlBatch(sessionId, page, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo);
+                    importXmlBatch(sessionId, page, perPage, totalToProcess, postType, destinationPostType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo, eventStartDateFrom, eventStartDateTo);
                 }, function() {
-                    importXmlBatch(sessionId, page + 1, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo);
+                    importXmlBatch(sessionId, page + 1, perPage, totalToProcess, postType, destinationPostType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo, eventStartDateFrom, eventStartDateTo);
                 });
             });
         }
 
-        function importBatch(sourceUrl, page, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo) {
+        function importBatch(sourceUrl, page, perPage, totalToProcess, postType, destinationPostType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo, eventStartDateFrom, eventStartDateTo) {
             if (importCancelled) {
                 finishImport(page, 'CANCELLED');
                 return;
@@ -579,8 +646,11 @@ function fwk_content_manager_page() {
                     page: page,
                     per_page: fetchCount,
                     post_type: postType,
+                    destination_post_type: destinationPostType,
                     date_from: dateFrom,
                     date_to: dateTo,
+                    event_start_date_from: eventStartDateFrom,
+                    event_start_date_to: eventStartDateTo,
                     force_images: forceImages ? 1 : 0,
                     skip_images: skipImages ? 1 : 0,
                     only_new: onlyNew ? 1 : 0,
@@ -598,7 +668,7 @@ function fwk_content_manager_page() {
                     importStats.errors++;
                     updateStats(page, batchTime, response.data ? response.data.memory_usage : null);
                     setTimeout(function(){
-                        importBatch(sourceUrl, page + 1, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo);
+                        importBatch(sourceUrl, page + 1, perPage, totalToProcess, postType, destinationPostType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo, eventStartDateFrom, eventStartDateTo);
                     }, 2000);
                     return;
                 }
@@ -609,20 +679,20 @@ function fwk_content_manager_page() {
                     let delay = 1000;
                     if (parseFloat(batchTime) > 30) delay = 3000;
                     else if (parseFloat(batchTime) > 15) delay = 2000;
-                    
+
                     addLog('Batch ' + page + ' completed in ' + batchTime + 's. Next batch in ' + (delay/1000) + 's...', 'debug');
 
                     setTimeout(function(){
-                        importBatch(sourceUrl, page + 1, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo);
+                        importBatch(sourceUrl, page + 1, perPage, totalToProcess, postType, destinationPostType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo, eventStartDateFrom, eventStartDateTo);
                     }, delay);
                 } else {
                     finishImport(page, 'COMPLETE');
                 }
             }).fail(function(xhr, status, error) {
                 handleBatchError(xhr, status, error, page, function() {
-                    importBatch(sourceUrl, page, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo);
+                    importBatch(sourceUrl, page, perPage, totalToProcess, postType, destinationPostType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo, eventStartDateFrom, eventStartDateTo);
                 }, function() {
-                    importBatch(sourceUrl, page + 1, perPage, totalToProcess, postType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo);
+                    importBatch(sourceUrl, page + 1, perPage, totalToProcess, postType, destinationPostType, forceImages, onlyNew, onlyExisting, onlyImages, fuzzyMatch, debugMode, skipImages, dateFrom, dateTo, eventStartDateFrom, eventStartDateTo);
                 });
             });
         }
@@ -1991,26 +2061,29 @@ function fwk_ajax_acf_import_xml_batch() {
 
     if (!current_user_can('manage_options')) wp_send_json_error('Unauthorized');
 
-    $session_id    = sanitize_text_field($_POST['session_id']);
-    $page          = max(1, intval($_POST['page']));
-    $per_page      = max(1, min(50, intval($_POST['per_page'])));
-    $post_type     = sanitize_text_field($_POST['post_type'] ?? 'post');
-    $date_from     = sanitize_text_field($_POST['date_from'] ?? '');
-    $date_to       = sanitize_text_field($_POST['date_to'] ?? '');
-    $force_images  = !empty($_POST['force_images']);
-    $skip_images   = !empty($_POST['skip_images']);
-    $only_new      = !empty($_POST['only_new']);
-    $only_existing = !empty($_POST['only_existing']);
-    $only_images   = !empty($_POST['only_images']);
-    $fuzzy_match   = !empty($_POST['fuzzy_match']);
-    $debug_mode    = !empty($_POST['debug_mode']);
+    $session_id            = sanitize_text_field($_POST['session_id']);
+    $page                  = max(1, intval($_POST['page']));
+    $per_page              = max(1, min(50, intval($_POST['per_page'])));
+    $post_type             = sanitize_text_field($_POST['post_type'] ?? 'post');
+    $destination_post_type = sanitize_text_field($_POST['destination_post_type'] ?? 'post');
+    $date_from             = sanitize_text_field($_POST['date_from'] ?? '');
+    $date_to               = sanitize_text_field($_POST['date_to'] ?? '');
+    $event_start_date_from = sanitize_text_field($_POST['event_start_date_from'] ?? '');
+    $event_start_date_to   = sanitize_text_field($_POST['event_start_date_to'] ?? '');
+    $force_images          = !empty($_POST['force_images']);
+    $skip_images           = !empty($_POST['skip_images']);
+    $only_new              = !empty($_POST['only_new']);
+    $only_existing         = !empty($_POST['only_existing']);
+    $only_images           = !empty($_POST['only_images']);
+    $fuzzy_match           = !empty($_POST['fuzzy_match']);
+    $debug_mode            = !empty($_POST['debug_mode']);
 
     $all_events = get_transient($session_id);
     if (!$all_events) {
         wp_send_json_error('Session expired - please re-upload XML');
     }
 
-    // Apply date filtering if specified
+    // Apply published date filtering if specified
     if (!empty($date_from) || !empty($date_to)) {
         $all_events = array_filter($all_events, function($event) use ($date_from, $date_to) {
             $post_date = $event['post_date'] ?? '';
@@ -2027,6 +2100,33 @@ function fwk_ajax_acf_import_xml_batch() {
             if (!empty($date_to)) {
                 $to_timestamp = strtotime($date_to . ' 23:59:59');
                 if ($event_timestamp > $to_timestamp) return false;
+            }
+
+            return true;
+        });
+        $all_events = array_values($all_events); // Re-index array
+    }
+
+    // Apply event start date filtering if specified (for event types only)
+    if (!empty($event_start_date_from) || !empty($event_start_date_to)) {
+        $all_events = array_filter($all_events, function($event) use ($event_start_date_from, $event_start_date_to) {
+            // Get event start date from meta field
+            $event_start_date = $event['meta_flat']['_EventStartDate'] ??
+                                $event['meta_flat']['time_date_event_dates_event_start_date'] ?? '';
+
+            if (empty($event_start_date)) return true; // Include if no start date
+
+            $start_timestamp = strtotime($event_start_date);
+            if ($start_timestamp === false) return true; // Include if invalid date
+
+            if (!empty($event_start_date_from)) {
+                $from_timestamp = strtotime($event_start_date_from);
+                if ($start_timestamp < $from_timestamp) return false;
+            }
+
+            if (!empty($event_start_date_to)) {
+                $to_timestamp = strtotime($event_start_date_to . ' 23:59:59');
+                if ($start_timestamp > $to_timestamp) return false;
             }
 
             return true;
@@ -2105,7 +2205,7 @@ function fwk_ajax_acf_import_xml_batch() {
             continue;
         }
 
-        $result = fwk_import_single_event_acf($source_event, $post_id, $force_images, $debug_mode, $only_images, $skip_images);
+        $result = fwk_import_single_event_acf($source_event, $post_id, $force_images, $debug_mode, $only_images, $skip_images, $destination_post_type);
 
         $results['processed']++;
 
@@ -2194,19 +2294,22 @@ function fwk_ajax_acf_import_batch() {
 
     if (!current_user_can('manage_options')) wp_send_json_error('Unauthorized');
 
-    $source_url    = sanitize_text_field($_POST['source_url']);
-    $page          = max(1, intval($_POST['page']));
-    $per_page      = max(1, min(50, intval($_POST['per_page'])));
-    $post_type     = sanitize_text_field($_POST['post_type'] ?? 'post');
-    $date_from     = sanitize_text_field($_POST['date_from'] ?? '');
-    $date_to       = sanitize_text_field($_POST['date_to'] ?? '');
-    $force_images  = !empty($_POST['force_images']);
-    $skip_images   = !empty($_POST['skip_images']);
-    $only_new      = !empty($_POST['only_new']);
-    $only_existing = !empty($_POST['only_existing']);
-    $only_images   = !empty($_POST['only_images']);
-    $fuzzy_match   = !empty($_POST['fuzzy_match']);
-    $debug_mode    = !empty($_POST['debug_mode']);
+    $source_url            = sanitize_text_field($_POST['source_url']);
+    $page                  = max(1, intval($_POST['page']));
+    $per_page              = max(1, min(50, intval($_POST['per_page'])));
+    $post_type             = sanitize_text_field($_POST['post_type'] ?? 'post');
+    $destination_post_type = sanitize_text_field($_POST['destination_post_type'] ?? 'post');
+    $date_from             = sanitize_text_field($_POST['date_from'] ?? '');
+    $date_to               = sanitize_text_field($_POST['date_to'] ?? '');
+    $event_start_date_from = sanitize_text_field($_POST['event_start_date_from'] ?? '');
+    $event_start_date_to   = sanitize_text_field($_POST['event_start_date_to'] ?? '');
+    $force_images          = !empty($_POST['force_images']);
+    $skip_images           = !empty($_POST['skip_images']);
+    $only_new              = !empty($_POST['only_new']);
+    $only_existing         = !empty($_POST['only_existing']);
+    $only_images           = !empty($_POST['only_images']);
+    $fuzzy_match           = !empty($_POST['fuzzy_match']);
+    $debug_mode            = !empty($_POST['debug_mode']);
 
     $url = add_query_arg([
         'paged'    => $page,
@@ -2239,7 +2342,7 @@ function fwk_ajax_acf_import_batch() {
 
     $events  = $data['posts'];
 
-    // Apply date filtering if specified
+    // Apply published date filtering if specified
     if (!empty($date_from) || !empty($date_to)) {
         $events = array_filter($events, function($event) use ($date_from, $date_to) {
             $post_date = $event['post_date'] ?? '';
@@ -2256,6 +2359,33 @@ function fwk_ajax_acf_import_batch() {
             if (!empty($date_to)) {
                 $to_timestamp = strtotime($date_to . ' 23:59:59');
                 if ($event_timestamp > $to_timestamp) return false;
+            }
+
+            return true;
+        });
+        $events = array_values($events); // Re-index array
+    }
+
+    // Apply event start date filtering if specified (for event types only)
+    if (!empty($event_start_date_from) || !empty($event_start_date_to)) {
+        $events = array_filter($events, function($event) use ($event_start_date_from, $event_start_date_to) {
+            // Get event start date from meta field
+            $event_start_date = $event['meta_flat']['_EventStartDate'] ??
+                                $event['meta_flat']['time_date_event_dates_event_start_date'] ?? '';
+
+            if (empty($event_start_date)) return true; // Include if no start date
+
+            $start_timestamp = strtotime($event_start_date);
+            if ($start_timestamp === false) return true; // Include if invalid date
+
+            if (!empty($event_start_date_from)) {
+                $from_timestamp = strtotime($event_start_date_from);
+                if ($start_timestamp < $from_timestamp) return false;
+            }
+
+            if (!empty($event_start_date_to)) {
+                $to_timestamp = strtotime($event_start_date_to . ' 23:59:59');
+                if ($start_timestamp > $to_timestamp) return false;
             }
 
             return true;
@@ -2326,7 +2456,7 @@ function fwk_ajax_acf_import_batch() {
             continue;
         }
 
-        $result = fwk_import_single_event_acf($source_event, $post_id, $force_images, $debug_mode, $only_images, $skip_images);
+        $result = fwk_import_single_event_acf($source_event, $post_id, $force_images, $debug_mode, $only_images, $skip_images, $destination_post_type);
 
         $results['processed']++;
 
@@ -2464,7 +2594,7 @@ function fwk_find_organizer_by_migration_id($source_organizer_id, $debug_mode = 
     ];
 }
 
-function fwk_import_single_event_acf($source_event, $existing_post_id, $force_images = false, $debug_mode = false, $only_images = false, $skip_images = false) {
+function fwk_import_single_event_acf($source_event, $existing_post_id, $force_images = false, $debug_mode = false, $only_images = false, $skip_images = false, $destination_post_type = null) {
     $result = [
         'status'             => 'skipped',
         'message'            => '',
@@ -2528,12 +2658,15 @@ function fwk_import_single_event_acf($source_event, $existing_post_id, $force_im
             return $result;
         }
 
+        // Use destination post type if provided, otherwise fall back to source post type
+        $post_type_to_use = $destination_post_type ?? ($source_event['post_type'] ?? 'post');
+
         $post_data = [
             'post_title'   => $source_event['post_title'] ?? '',
             'post_content' => $source_event['post_content'] ?? '',
             'post_excerpt' => $source_event['post_excerpt'] ?? '',
             'post_status'  => $source_event['post_status'] ?? 'publish',
-            'post_type'    => $source_event['post_type'] ?? 'post',
+            'post_type'    => $post_type_to_use,
             'post_name'    => $source_event['post_name'] ?? '',
         ];
 
