@@ -1,7 +1,7 @@
 /*
 Plugin Name: FWK Content Manager - Import, De-duplicate & Bulk Update
 Description: Import content from API or XML, detect and remove duplicates, and perform bulk updates across any post type with venue/organizer handling
-Version: 4.0
+Version: 4.1
 */
 
 if (!defined('ABSPATH')) exit;
